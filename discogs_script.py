@@ -1,7 +1,10 @@
 import discogs_client
 import os
+import sys
 from dotenv import load_dotenv 
 import json
+import heapq
+from itertools import count
 
 # loading variables from .env file
 load_dotenv() 
@@ -15,47 +18,68 @@ Hovering over a cluster will show the number of releases from that geographic ar
 '''
 
 # Searching for releases in the Drum n Bass style
-dnb_songs = d.search('', style='Drum n Bass', type='release', year='1990-1994')
-# Forming JSON data for further processing with pandas
-json_data = []
-for song in dnb_songs:
-    song_data = {
-        'title': song.title,
-        'year': song.year,
-        'country': song.country,
-        'have_marketplace': song.data.get('community', {}).get('have', 0)
-    }
-    json_data.append(song_data)
+def process_dnb_releases(year):
+    dnb_releases = d.search('', style='Drum n Bass', type='release', year=year)
 
-# Output JSON data to a file for further processing
-with open('dnb_songs.json', 'w') as f:
-    json.dump(json_data, f, indent=4)
-'''
-print(f"Number of users who have this release in the marketplace: {have_marketplace}")
-have = dnb_songs[0].data.get('community', {}).get('have', 'N/A')
-print(f"Number of users who have this release: {have}")
-'''
+    country_release_counts = {}
+    country_top_releases = {}
+    tie_breaker = count()
+    print(f"{len(dnb_releases)} releases found for {year}")
+    # Build release counts and top-5 releases per country in one pass
+    for release in dnb_releases:
+        data = release.data
 
-'''
-bristol_labels = d.search('', type='label')
-print("LABEL STRUCTURE: ", dir(bristol_labels[1]))
-print("PROFILE STRUCTURE: ", dir(bristol_labels[1].profile))
-print("PROFILE: ", bristol_labels[1].profile)
-print("CONTACT STRUCTURE: ", dir(bristol_labels[1].contact_info))
-print("CONTACT: ", bristol_labels[1].contact_info)'''
+        country = data.get('country')
+        if not country:
+            continue
 
-'''
-dnb_artist = d.search('', type='artist')
-print(f"Found {len(dnb_artist)} artists in the Drum n Bass style.")
-print("ARTIST STRUCTURE: ", dir(dnb_artist[0]))
-print("ARTIST PROFILE: ", dnb_artist[0].profile)
-'''
+        have_count = data.get('community', {}).get('have', 0) or 0
+        release_info = {'have_count': have_count}
 
-'''
-write_string = ""
-for song in dnb_songs:
-    write_string += f"Title: {song.title}, Year: {song.year}, Country: {song.country}\n"
+        title = data.get('title')
+        if title:
+            release_info['title'] = title
 
-with open('dnb_songs.txt', 'w') as f:
-    f.write(write_string)
-'''
+        release_info['year'] = data.get('year') or "Unknown Year"
+
+        image_url = data.get('cover_image') or data.get('thumb')
+        if image_url:
+            release_info['image_url'] = image_url
+
+        release_url = data.get('uri')
+        if release_url:
+            release_info['release_url'] = release_url
+
+        country_release_counts[country] = country_release_counts.get(country, 0) + 1
+
+        heap = country_top_releases.setdefault(country, [])
+        heap_entry = (have_count, next(tie_breaker), release_info)
+        if len(heap) < 5:
+            heapq.heappush(heap, heap_entry)
+        elif have_count > heap[0][0]:
+            heapq.heapreplace(heap, heap_entry)
+
+    json_data = []
+    for country, release_count in country_release_counts.items():
+        top_5_releases = [
+            entry[2] for entry in sorted(country_top_releases[country], key=lambda entry: entry[0], reverse=True)
+        ]
+        json_data.append({
+            "country": country,
+            "release_count": release_count,
+            "top_releases": top_5_releases
+        })
+        
+
+    # Output JSON data to a file for further processing
+    with open(f'dnb_viz_{year}_releases.json', 'w') as f:
+        json.dump(json_data, f, indent=4)
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python3 discogs_script.py <year_range>")
+        print("Example: python3 discogs_script.py 1990-1999")
+        sys.exit(1)
+    
+    year_range = sys.argv[1]
+    process_dnb_releases(year_range)
